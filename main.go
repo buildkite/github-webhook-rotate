@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/url"
+	"path"
 	"strings"
 
 	"github.com/Songmu/prompter"
@@ -25,6 +27,7 @@ func main() {
 	graphqlToken := flag.String("graphql-token", "", "A graphql token")
 	githubToken := flag.String("github-token", "", "A GitHub personal access token")
 	prompt := flag.Bool("prompt", true, "Whether to prompt before each rotate")
+	pipeline := flag.String("pipeline", "", "A specific pipeline slug to rotate")
 
 	flag.Parse()
 	log.SetFlags(log.Ltime)
@@ -49,19 +52,17 @@ func main() {
 
 	log.Printf("Building a map of github repositories with buildkite webhooks for %s", *org)
 
-	pipelines, err := listGithubPipelines(client, *org)
+	pipelines, err := listGithubPipelines(client, *org, *pipeline)
 	if err != nil {
 		log.Fatalf(color.RedString("🚨 Error getting pipelines: %v"), err)
 	}
 
-	processedRepos := map[string]struct{}{}
+	repoHooks := map[string][]*github.Hook{}
 
 	// iterate over all out pipelines
 	for _, pipeline := range pipelines {
-		// log.Printf("Finding repository for https://buildkite.com/%s", pipeline.String())
-
 		// don't process repositories multiple times
-		if _, ok := processedRepos[pipeline.Repository.String()]; ok {
+		if _, ok := repoHooks[pipeline.Repository.String()]; ok {
 			continue
 		}
 
@@ -76,18 +77,25 @@ func main() {
 		// store all the matching webhooks in our map
 		for _, hook := range hooks {
 			hookURL := hook.Config["url"].(string)
-			if _, exists := repoHookMap[hookURL]; !exists {
-				repoHookMap[hookURL] = []githubRepositoryHook{
+
+			// extract just the token to allow format changes over time
+			hookToken, err := getWebhookToken(hookURL)
+			if err != nil {
+				log.Fatalf(color.RedString("🚨 Error parsing webhook: %v"), err)
+			}
+
+			if _, exists := repoHookMap[hookToken]; !exists {
+				repoHookMap[hookToken] = []githubRepositoryHook{
 					githubRepositoryHook{pipeline.Repository, hook},
 				}
 			} else {
-				repoHookMap[hookURL] = append(repoHookMap[hookURL],
+				repoHookMap[hookToken] = append(repoHookMap[hookToken],
 					githubRepositoryHook{pipeline.Repository, hook})
 			}
 		}
 
-		// mark our map so we don't process repositories twice
-		processedRepos[pipeline.Repository.String()] = struct{}{}
+		// track the hooks for this repository
+		repoHooks[pipeline.Repository.String()] = hooks
 	}
 
 	// ---------------------------------------------------------------
@@ -99,17 +107,38 @@ func main() {
 		fmt.Printf("Pipeline: http://buildkite.com/%s/%s\n", pipeline.Org, pipeline.Slug)
 		fmt.Printf("\tCurrent Webhook: %s\n", pipeline.WebhookURL)
 
-		matches, ok := repoHookMap[pipeline.WebhookURL]
+		// lookup repositories that refer to this webhook token
+		matches, ok := repoHookMap[pipeline.WebhookToken]
 		if !ok {
-			fmt.Printf(color.YellowString("\t⚠️  No matching GitHub repositories\n"))
+			fmt.Printf(color.YellowString("\t⚠️  No GitHub repositories with matching hooks\n"))
 		} else {
 			fmt.Printf("\tMatching GitHub Repositories:\n")
 		}
 
+		// show repositories that match the pipeline webhook
 		for _, match := range matches {
 			fmt.Printf("\t\thttps://github.com/%s\n", match.githubRepository.String())
 			fmt.Printf("\t\t\tUpdate https://github.com/%s/settings/hooks/%d\n",
 				match.githubRepository.String(), *match.Hook.ID)
+		}
+
+		// show unknown webhooks for the repository
+		if hooks, ok := repoHooks[pipeline.Repository.String()]; ok {
+			unknown := []*github.Hook{}
+			for _, hook := range hooks {
+				if !isHookReferencedInPipelines(hook, pipelines) {
+					unknown = append(unknown, hook)
+				}
+			}
+			if len(unknown) > 0 {
+				fmt.Printf(color.YellowString("\t⚠️  Unknown Buildkite hooks found\n"))
+				for _, hook := range unknown {
+					fmt.Printf("\t\thttps://github.com/%s\n", pipeline.Repository.String())
+					fmt.Printf("\t\t\thttps://github.com/%s/settings/hooks/%d\n",
+						pipeline.Repository.String(), *hook.ID)
+					fmt.Printf("\t\t\t\t%s\n", hook.Config["url"])
+				}
+			}
 		}
 
 		if *prompt {
@@ -186,6 +215,32 @@ func parseGithubRepository(gitRemote string) (githubRepository, error) {
 	return githubRepository{pathParts[0], pathParts[1], gitRemote}, nil
 }
 
+// Webhook formats over the years
+// https://webhook.buildbox.io/github/xxxxxxxxxxxxxxxxx
+// https://webhook.buildkite.com/github/xxxxxxxxxxxxxxxxx
+// https://webhook.buildkite.com/deliver/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+func getWebhookToken(webhookURL string) (string, error) {
+	u, err := url.Parse(webhookURL)
+	if err != nil {
+		return "", err
+	}
+	return path.Base(u.Path), nil
+}
+
+func isHookReferencedInPipelines(hook *github.Hook, pipelines []pipeline) bool {
+	token, err := getWebhookToken(hook.Config["url"].(string))
+	if err != nil {
+		return false
+	}
+	for _, pipeline := range pipelines {
+		if pipeline.WebhookToken == token {
+			return true
+		}
+	}
+	return false
+}
+
 func getGithubRepositoryWebhooks(ctx context.Context, client *github.Client, repo githubRepository) ([]*github.Hook, error) {
 	hooks, _, err := client.Repositories.ListHooks(ctx, repo.Org, repo.Name, &github.ListOptions{})
 	if err != nil {
@@ -216,19 +271,20 @@ func updateGithubRepositoryHook(ctx context.Context, client *github.Client, repo
 }
 
 type pipeline struct {
-	ID         string
-	Org        string
-	Slug       string
-	URL        string
-	WebhookURL string
-	Repository githubRepository
+	ID           string
+	Org          string
+	Slug         string
+	URL          string
+	WebhookURL   string
+	WebhookToken string
+	Repository   githubRepository
 }
 
 func (p pipeline) String() string {
 	return fmt.Sprintf("%s/%s", p.Org, p.Slug)
 }
 
-func listGithubPipelines(client *graphql.Client, org string) ([]pipeline, error) {
+func listGithubPipelines(client *graphql.Client, org, pipelineFilter string) ([]pipeline, error) {
 	resp, err := client.Do(`
 	query ListPipelines($org: ID!) {
 		organization(slug: $org) {
@@ -294,6 +350,9 @@ func listGithubPipelines(client *graphql.Client, org string) ([]pipeline, error)
 
 	var pipelines []pipeline
 	for _, pipelineEdge := range parsedResp.Data.Organization.Pipelines.Edges {
+		if pipelineFilter != "" && pipelineEdge.Node.Slug != pipelineFilter {
+			continue
+		}
 		if pipelineEdge.Node.Repository.Provider.TypeName != githubRepositoryProvider {
 			continue
 		}
@@ -301,13 +360,18 @@ func listGithubPipelines(client *graphql.Client, org string) ([]pipeline, error)
 		if err != nil {
 			return nil, err
 		}
+		webhookToken, err := getWebhookToken(pipelineEdge.Node.Repository.Provider.WebhookURL)
+		if err != nil {
+			return nil, err
+		}
 		pipelines = append(pipelines, pipeline{
-			ID:         pipelineEdge.Node.ID,
-			URL:        pipelineEdge.Node.URL,
-			Org:        org,
-			Slug:       pipelineEdge.Node.Slug,
-			WebhookURL: pipelineEdge.Node.Repository.Provider.WebhookURL,
-			Repository: repo,
+			ID:           pipelineEdge.Node.ID,
+			URL:          pipelineEdge.Node.URL,
+			Org:          org,
+			Slug:         pipelineEdge.Node.Slug,
+			WebhookURL:   pipelineEdge.Node.Repository.Provider.WebhookURL,
+			WebhookToken: webhookToken,
+			Repository:   repo,
 		})
 	}
 	return pipelines, nil
