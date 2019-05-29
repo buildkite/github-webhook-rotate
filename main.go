@@ -108,7 +108,8 @@ func main() {
 
 		for _, match := range matches {
 			fmt.Printf("\t\thttps://github.com/%s\n", match.githubRepository.String())
-			fmt.Printf("\t\t\tUpdate https://github.com/buildkite/agent/settings/hooks/%d\n", *match.Hook.ID)
+			fmt.Printf("\t\t\tUpdate https://github.com/%s/settings/hooks/%d\n",
+				match.githubRepository.String(), *match.Hook.ID)
 		}
 
 		if *prompt {
@@ -142,7 +143,8 @@ func main() {
 
 		// apply the new webhook to all the matching repository hooks
 		for _, match := range matches {
-			log.Printf("Updating https://github.com/buildkite/agent/settings/hooks/%d", *match.Hook.ID)
+			log.Printf("Updating https://github.com/%s/settings/hooks/%d",
+				match.githubRepository.String(), *match.Hook.ID)
 			err = updateGithubRepositoryHook(ctx, ghClient, match, newWebhookURL)
 			if err != nil {
 				log.Fatalf(color.RedString(
