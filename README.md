@@ -36,3 +36,7 @@ github-webhook-rotate \
 * For each Pipeline
   * Rotate the build webhook with the `pipelineRotateWebhookURL` GraphQL mutation
   * Update all Github Repository webhooks that refer to the updated webhook
+
+## Copyright
+
+Copyright (c) 2019 Buildkite Pty Ltd. See [LICENSE](./LICENSE.txt) for details.
