@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/url"
 	"path"
@@ -106,13 +105,14 @@ func main() {
 	for _, pipeline := range pipelines {
 		fmt.Printf("Pipeline: http://buildkite.com/%s/%s\n", pipeline.Org, pipeline.Slug)
 		fmt.Printf("\tCurrent Webhook: %s\n", pipeline.WebhookURL)
+		fmt.Printf("\tRepository https://github.com/%s\n", pipeline.Repository.String())
 
 		// lookup repositories that refer to this webhook token
 		matches, ok := repoHookMap[pipeline.WebhookToken]
 		if !ok {
 			fmt.Printf(color.YellowString("\t⚠️  No GitHub repositories with matching hooks\n"))
 		} else {
-			fmt.Printf("\tMatching GitHub Repositories:\n")
+			fmt.Printf("\tGithub Repositories with matching Webhooks:\n")
 		}
 
 		// show repositories that match the pipeline webhook
@@ -315,9 +315,7 @@ func listGithubPipelines(client *graphql.Client, org, pipelineFilter string) ([]
 	}
 
 	if resp.StatusCode != 200 {
-		body, _ := ioutil.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		return nil, fmt.Errorf("%s - %s", resp.Status, string(body))
+		return nil, fmt.Errorf("%s", resp.Status)
 	}
 
 	var parsedResp struct {
