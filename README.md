@@ -10,7 +10,7 @@ This tools requires a Github Personal Access Token with `admin:repo_hook` and a 
 
 This uses Go 1.12 with modules enabled.
 
-```
+```shell
 go get -u github.com/buildkite/github-webhook-rotate
 ```
 
@@ -18,9 +18,9 @@ go get -u github.com/buildkite/github-webhook-rotate
 
 By default the tool will prompt before each change that is made.
 
-```
-export GRAPHQL_TOKEN=....
-export GITHUB_TOKEN=...
+```shell
+export GRAPHQL_TOKEN="...."
+export GITHUB_TOKEN="..."
 
 github-webhook-rotate \
   --buildkite-org=<my-org> \
