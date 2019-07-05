@@ -23,7 +23,7 @@ export GRAPHQL_TOKEN="...."
 export GITHUB_TOKEN="..."
 
 github-webhook-rotate \
-  --buildkite-org=<my-org> \
+  --buildkite-org="<my-org>" \
   --graphql-token "$GRAPHQL_TOKEN" \
   --github-token "$GITHUB_TOKEN"
 ```
